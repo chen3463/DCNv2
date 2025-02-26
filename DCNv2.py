@@ -1,12 +1,12 @@
 import torch.nn as nn
 
 class DCNv2(nn.Module):
-    def __init__(self, num_numerical, cat_cardinalities, emb_dim=16, num_cross_layers=3, mlp_dims=[128, 64, 32]):
+    def __init__(self, num_numerical, cat_cardinalities, emb_dim=16, num_cross_layers=3, rank=2, mlp_dims=[128, 64, 32]):
         super(DCNv2, self).__init__()
 
         # 🔹 Categorical Embeddings
         self.embeddings = nn.ModuleList([
-            nn.Embedding(num_categories, emb_dim) for num_categories in cat_cardinalities
+            nn.Embedding(num_categories + 1, emb_dim) for num_categories in cat_cardinalities  # Handle unseen categories
         ])
         emb_output_dim = len(cat_cardinalities) * emb_dim
 
@@ -15,12 +15,12 @@ class DCNv2(nn.Module):
 
         input_dim = num_numerical + emb_output_dim
 
-        # 🔹 Cross Network
+        # 🔹 Low-rank Cross Network
         self.cross_layers = nn.ModuleList([
-            nn.Linear(input_dim, input_dim, bias=True) for _ in range(num_cross_layers)
+            nn.Linear(input_dim, rank, bias=False) for _ in range(num_cross_layers)
         ])
         self.cross_ranks = nn.ModuleList([
-            nn.Linear(input_dim, input_dim, bias=False) for _ in range(num_cross_layers)
+            nn.Linear(rank, input_dim, bias=False) for _ in range(num_cross_layers)
         ])
 
         # 🔹 Deep Network (MLP)
