@@ -25,7 +25,7 @@ def objective(trial):
             val_targets.extend(labels.cpu().numpy())
 
     aucpr = average_precision_score(val_targets, val_preds)
-    return -aucpr  # Optuna maximizes, so we minimize the negative value
+    return aucpr  # Optuna maximizes
 
 # 🔹 Run Hyperparameter Optimization
 study = optuna.create_study(direction='maximize')
