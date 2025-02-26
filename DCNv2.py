@@ -60,15 +60,22 @@ class DeepNetwork(nn.Module):
     def forward(self, x):
         return self.network(x)
 
-
-import torch
-import torch.nn as nn
-
 class DCNv2(nn.Module):
-    def __init__(self, input_dim, num_cross_layers=3, mlp_dims=[128, 64, 32]):
+    def __init__(self, num_numerical, cat_cardinalities, emb_dim=16, num_cross_layers=3, mlp_dims=[128, 64, 32]):
         super(DCNv2, self).__init__()
 
-        # Low-Rank Cross Network
+        # 🔹 1. Categorical Feature Embedding
+        self.embeddings = nn.ModuleList([
+            nn.Embedding(num_categories, emb_dim) for num_categories in cat_cardinalities
+        ])
+        emb_output_dim = len(cat_cardinalities) * emb_dim  # Total embedding output size
+
+        # 🔹 2. Normalize Numerical Features
+        self.num_layer_norm = nn.LayerNorm(num_numerical)  # LayerNorm for numerical inputs
+
+        input_dim = num_numerical + emb_output_dim  # Final input size after embedding & normalization
+
+        # 🔹 3. Cross Network (Low-Rank)
         self.cross_layers = nn.ModuleList([
             nn.Linear(input_dim, input_dim, bias=True) for _ in range(num_cross_layers)
         ])
@@ -76,7 +83,7 @@ class DCNv2(nn.Module):
             nn.Linear(input_dim, input_dim, bias=False) for _ in range(num_cross_layers)
         ])
 
-        # Deep Network (MLP) with BatchNorm
+        # 🔹 4. Deep Network (MLP) with BatchNorm
         mlp_layers = []
         prev_dim = input_dim
         for dim in mlp_dims:
@@ -86,23 +93,34 @@ class DCNv2(nn.Module):
             prev_dim = dim
         self.mlp = nn.Sequential(*mlp_layers)
 
-        # Final Fully Connected Layer
+        # 🔹 5. Final Fully Connected Layer
         self.final_layer = nn.Linear(input_dim + mlp_dims[-1], 1)
 
-    def forward(self, x):
-        x_0 = x.clone()
+    def forward(self, numerical_features, categorical_features):
+        # 🔹 1. Process Categorical Data (Embedding)
+        embedded_cats = [emb(categorical_features[:, i]) for i, emb in enumerate(self.embeddings)]
+        cat_out = torch.cat(embedded_cats, dim=1)  # Concatenate embeddings
 
-        # Cross Network (Low-Rank)
+        # 🔹 2. Normalize Numerical Data
+        num_out = self.num_layer_norm(numerical_features)  # Normalize numerical features
+
+        # 🔹 3. Combine Processed Inputs
+        x_0 = torch.cat([num_out, cat_out], dim=1)  # Concatenate embeddings & numerical features
+
+        # 🔹 4. Cross Network (Low-Rank)
+        x = x_0.clone()
         for W_q, W_r in zip(self.cross_layers, self.cross_ranks):
-            x = x_0 + W_r(W_q(x))
+            x = x_0 + W_r(W_q(x))  # Residual connection
 
-        # Deep Network (MLP)
+        # 🔹 5. Deep Network (MLP)
         deep_out = self.mlp(x_0)
 
-        # Concatenate Cross and Deep outputs
+        # 🔹 6. Concatenate Cross and Deep outputs
         combined = torch.cat([x, deep_out], dim=1)
 
-        # Final Prediction
+        # 🔹 7. Final Prediction
         out = self.final_layer(combined)
         return torch.sigmoid(out)  # Assuming binary classification
+
+
 
