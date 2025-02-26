@@ -1,12 +1,13 @@
 from sklearn.metrics import average_precision_score, roc_auc_score
+import torch
 
-def train_model(model, train_loader, valid_loader, epochs, lr, patience, device):
+def train_model(model, train_loader, valid_loader, epochs, lr, patience, device, save_path="best_model.pth"):
     model.to(device)
     criterion = nn.BCELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     
     best_aucpr = 0
-    best_model = None
+    best_model_path = save_path
     patience_counter = 0
 
     for epoch in range(epochs):
@@ -34,18 +35,21 @@ def train_model(model, train_loader, valid_loader, epochs, lr, patience, device)
 
         print(f"Epoch [{epoch+1}/{epochs}]  AUCPR: {aucpr:.4f}  AUC: {auc:.4f}")
 
-        # 🔹 Early Stopping
+        # 🔹 Save Best Model
         if aucpr > best_aucpr:
             best_aucpr = aucpr
-            best_model = model.state_dict()
+            torch.save(model.state_dict(), best_model_path)
+            print(f"✅ Best model saved at {best_model_path}")
             patience_counter = 0
         else:
             patience_counter += 1
 
+        # 🔹 Early Stopping
         if patience_counter >= patience:
             print(f"⏳ Early stopping at epoch {epoch+1}")
             break
 
-    # 🔹 Load Best Model
-    model.load_state_dict(best_model)
+    # 🔹 Load Best Model Before Returning
+    model.load_state_dict(torch.load(best_model_path))
     return model
+
