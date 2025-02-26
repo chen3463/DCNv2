@@ -1,3 +1,5 @@
+from sklearn.metrics import average_precision_score
+
 def train_model(model, train_loader, valid_loader, epochs, lr, device):
     model.to(device)
     criterion = nn.BCELoss()
@@ -15,11 +17,13 @@ def train_model(model, train_loader, valid_loader, epochs, lr, device):
 
         # Validation
         model.eval()
-        val_loss = 0
+        val_preds, val_targets = [], []
         with torch.no_grad():
             for num_features, cat_features, labels in valid_loader:
                 num_features, cat_features, labels = num_features.to(device), cat_features.to(device), labels.to(device)
                 outputs = model(num_features, cat_features).squeeze()
-                val_loss += criterion(outputs, labels).item()
+                val_preds.extend(outputs.cpu().numpy())
+                val_targets.extend(labels.cpu().numpy())
 
-        print(f"Epoch [{epoch+1}/{epochs}], Validation Loss: {val_loss/len(valid_loader):.4f}")
+        aucpr = average_precision_score(val_targets, val_preds)
+        print(f"Epoch [{epoch+1}/{epochs}], AUCPR: {aucpr:.4f}")
