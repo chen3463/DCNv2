@@ -12,28 +12,17 @@ import shap
 
 # 🔹 Load and Prepare Data
 class DataLoaderWrapper:
-    def __init__(self, train_path, valid_path, test_path):
+    def __init__(self, train_path, valid_path, test_path, numerical_columns, categorical_columns, one_hot_columns):
         self.train_df = pd.read_csv(train_path)
         self.valid_df = pd.read_csv(valid_path)
         self.test_df = pd.read_csv(test_path)
-        self.numerical_columns = []
-        self.categorical_columns = []
-        self.one_hot_columns = []
+        self.numerical_columns = numerical_columns
+        self.categorical_columns = categorical_columns
+        self.one_hot_columns = one_hot_columns
         self.encoders = {}
         self.scaler = StandardScaler()
         self.one_hot_enc = OneHotEncoder(sparse=False, handle_unknown='ignore')
-        self._identify_columns()
         self._fit_transformers()
-
-    def _identify_columns(self):
-        for col in self.train_df.columns:
-            if self.train_df[col].dtype == 'object':
-                if len(self.train_df[col].unique()) > 10:
-                    self.categorical_columns.append(col)
-                else:
-                    self.one_hot_columns.append(col)
-            else:
-                self.numerical_columns.append(col)
 
     def _fit_transformers(self):
         for col in self.categorical_columns:
