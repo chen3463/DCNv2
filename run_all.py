@@ -27,9 +27,12 @@ class DataLoaderWrapper:
     def _fit_transformers(self):
         for col in self.categorical_columns:
             le = LabelEncoder()
-            self.train_df[col] = le.fit_transform(self.train_df[col])
-            self.valid_df[col] = le.transform(self.valid_df[col])
-            self.test_df[col] = le.transform(self.test_df[col])
+            self.train_df[col] = le.fit_transform(self.train_df[col].astype(str))
+            le_classes = list(le.classes_) + ['<UNK>']
+            le.classes_ = np.array(le_classes)
+            
+            self.valid_df[col] = self.train_df[col].map(lambda s: le.transform([s])[0] if s in le.classes_ else le.transform(['<UNK>'])[0])
+            self.test_df[col] = self.test_df[col].map(lambda s: le.transform([s])[0] if s in le.classes_ else le.transform(['<UNK>'])[0])
             self.encoders[col] = le
 
         self.train_df[self.numerical_columns] = self.scaler.fit_transform(self.train_df[self.numerical_columns])
