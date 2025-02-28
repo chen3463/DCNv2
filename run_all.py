@@ -28,11 +28,8 @@ class DataLoaderWrapper:
         for col in self.categorical_columns:
             le = LabelEncoder()
             self.train_df[col] = le.fit_transform(self.train_df[col].astype(str))
-            le_classes = list(le.classes_) + ['<UNK>']
-            le.classes_ = np.array(le_classes)
-            
-            self.valid_df[col] = self.train_df[col].map(lambda s: le.transform([s])[0] if s in le.classes_ else le.transform(['<UNK>'])[0])
-            self.test_df[col] = self.test_df[col].map(lambda s: le.transform([s])[0] if s in le.classes_ else le.transform(['<UNK>'])[0])
+            self.valid_df[col] = self.valid_df[col].astype(str).apply(lambda x: le.transform([x])[0] if x in le.classes_ else len(le.classes_))
+            self.test_df[col] = self.test_df[col].astype(str).apply(lambda x: le.transform([x])[0] if x in le.classes_ else len(le.classes_))
             self.encoders[col] = le
 
         self.train_df[self.numerical_columns] = self.scaler.fit_transform(self.train_df[self.numerical_columns])
@@ -92,57 +89,48 @@ class DCNv2(nn.Module):
         output = self.output_layer(deep_out)
         return torch.sigmoid(output).squeeze()
 
-# 🔹 Model Training and Evaluation
-def train_and_evaluate(batch_size, rank, deep_layers, cross_layers):
-    model = DCNv2(num_numerical=len(data_loader.numerical_columns),
-                  num_categorical=len(data_loader.categorical_columns),
-                  num_one_hot=len(data_loader.one_hot_columns),
-                  embedding_sizes=[(len(data_loader.encoders[col].classes_), min(50, (len(data_loader.encoders[col].classes_) + 1) // 2)) for col in data_loader.categorical_columns],
-                  rank=rank, cross_layers=cross_layers, deep_layers=deep_layers).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    criterion = nn.BCELoss()
-
-    train_loader = data_loader.get_dataloader(data_loader.train_df, batch_size)
-    valid_loader = data_loader.get_dataloader(data_loader.valid_df, batch_size)
-    test_loader = data_loader.get_dataloader(data_loader.test_df, batch_size)
-
-    best_val_aucpr = 0
-    for epoch in range(10):
-        model.train()
-        for num_features, cat_features, one_hot_features, labels in train_loader:
-            num_features, cat_features, one_hot_features, labels = num_features.to(device), cat_features.to(device), one_hot_features.to(device), labels.to(device)
-            optimizer.zero_grad()
-            outputs = model(num_features, cat_features, one_hot_features)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-        
-        model.eval()
-        val_preds, val_labels = [], []
-        with torch.no_grad():
-            for num_features, cat_features, one_hot_features, labels in valid_loader:
-                num_features, cat_features, one_hot_features, labels = num_features.to(device), cat_features.to(device), one_hot_features.to(device), labels.to(device)
-                outputs = model(num_features, cat_features, one_hot_features)
-                val_preds.extend(outputs.cpu().numpy())
-                val_labels.extend(labels.cpu().numpy())
-        val_aucpr = average_precision_score(val_labels, val_preds)
-        if val_aucpr > best_val_aucpr:
-            best_val_aucpr = val_aucpr
-            best_model = model.state_dict()
+# 🔹 Feature Selection & Hyperparameter Tuning
+def hyperparameter_tuning_with_feature_selection():
+    best_score = 0
+    best_params = None
+    selected_features = data_loader.numerical_columns + data_loader.categorical_columns + data_loader.one_hot_columns
     
-    return best_model
+    while True:
+        def objective(trial):
+            params = {
+                'lr': trial.suggest_loguniform('lr', 1e-4, 1e-2),
+                'batch_size': trial.suggest_categorical('batch_size', [32, 64, 128]),
+                'rank': trial.suggest_int('rank', 1, 10),
+                'cross_layers': trial.suggest_int('cross_layers', 1, 3),
+                'deep_layers': [trial.suggest_int(f'deep_layer_{i}', 32, 128) for i in range(3)]
+            }
+            val_aucpr = train_and_evaluate(params, selected_features)
+            return val_aucpr
 
+        study = optuna.create_study(direction='maximize')
+        study.optimize(objective, n_trials=10)
+        
+        if study.best_value <= best_score:
+            break
+        
+        best_score = study.best_value
+        best_params = study.best_params
+        
+        # Feature Importance Calculation
+        explainer = shap.Explainer(model, torch.cat([num_features, cat_features, one_hot_features], dim=1))
+        shap_values = explainer.shap_values(torch.cat([num_features, cat_features, one_hot_features], dim=1))
+        feature_importance = np.abs(shap_values).mean(axis=0)
+        feature_ranking = sorted(zip(selected_features, feature_importance), key=lambda x: x[1], reverse=True)
+        selected_features = [f[0] for f in feature_ranking[:int(0.9 * len(feature_ranking))]]
+        
+        print("Selected Features in this iteration:", selected_features)
+
+    return best_params
+
+# 🔹 Final Evaluation
 def evaluate_on_test(best_params):
-    model = DCNv2(num_numerical=len(data_loader.numerical_columns),
-                  num_categorical=len(data_loader.categorical_columns),
-                  num_one_hot=len(data_loader.one_hot_columns),
-                  embedding_sizes=[(len(data_loader.encoders[col].classes_), min(50, (len(data_loader.encoders[col].classes_) + 1) // 2)) for col in data_loader.categorical_columns],
-                  rank=best_params['rank'],
-                  cross_layers=best_params['cross_layers'],
-                  deep_layers=best_params['deep_layers']).to(device)
     model.load_state_dict(torch.load("best_model.pth"))
     model.eval()
-
     test_loader = data_loader.get_dataloader(data_loader.test_df, best_params['batch_size'])
     test_preds, test_labels = [], []
     with torch.no_grad():
@@ -154,6 +142,5 @@ def evaluate_on_test(best_params):
     test_aucpr = average_precision_score(test_labels, test_preds)
     print(f"Test AUCPR: {test_aucpr:.4f}")
 
-# 🔹 Run Feature Selection and Hyperparameter Tuning
 best_params = hyperparameter_tuning_with_feature_selection()
 evaluate_on_test(best_params)
