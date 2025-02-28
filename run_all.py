@@ -88,6 +88,7 @@ class DCNv2(nn.Module):
         deep_out = self.deep_network(x_cross)
         output = self.output_layer(deep_out)
         return torch.sigmoid(output).squeeze()
+        
 def train_and_evaluate(params, selected_features):
     # Prepare Data Loaders
     train_loader = data_loader.get_dataloader(data_loader.train_df[selected_features + ['target']], batch_size=params['batch_size'])
@@ -100,6 +101,9 @@ def train_and_evaluate(params, selected_features):
     
     embedding_sizes = [(len(data_loader.encoders[col].classes_), min(50, (len(data_loader.encoders[col].classes_) // 2) + 1)) for col in data_loader.categorical_columns if col in selected_features]
     
+    # 🔹 Extract Deep Layers Correctly
+    deep_layers = params.get("deep_layers", [64, 64, 64])  # Default to [64, 64, 64] if not found
+    
     model = DCNv2(
         num_numerical=num_numerical,
         num_categorical=num_categorical,
@@ -107,7 +111,7 @@ def train_and_evaluate(params, selected_features):
         embedding_sizes=embedding_sizes,
         rank=params['rank'],
         cross_layers=params['cross_layers'],
-        deep_layers=[params[f'deep_layer_{i}'] for i in range(3)]
+        deep_layers=deep_layers
     ).to(device)
     
     # Optimizer & Loss Function
