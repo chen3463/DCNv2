@@ -88,6 +88,79 @@ class DCNv2(nn.Module):
         deep_out = self.deep_network(x_cross)
         output = self.output_layer(deep_out)
         return torch.sigmoid(output).squeeze()
+def train_and_evaluate(params, selected_features):
+    # Prepare Data Loaders
+    train_loader = data_loader.get_dataloader(data_loader.train_df[selected_features + ['target']], batch_size=params['batch_size'])
+    valid_loader = data_loader.get_dataloader(data_loader.valid_df[selected_features + ['target']], batch_size=params['batch_size'])
+    
+    # Model Initialization
+    num_numerical = len([f for f in selected_features if f in data_loader.numerical_columns])
+    num_categorical = len([f for f in selected_features if f in data_loader.categorical_columns])
+    num_one_hot = len([f for f in selected_features if f in data_loader.one_hot_columns])
+    
+    embedding_sizes = [(len(data_loader.encoders[col].classes_), min(50, (len(data_loader.encoders[col].classes_) // 2) + 1)) for col in data_loader.categorical_columns if col in selected_features]
+    
+    model = DCNv2(
+        num_numerical=num_numerical,
+        num_categorical=num_categorical,
+        num_one_hot=num_one_hot,
+        embedding_sizes=embedding_sizes,
+        rank=params['rank'],
+        cross_layers=params['cross_layers'],
+        deep_layers=[params[f'deep_layer_{i}'] for i in range(3)]
+    ).to(device)
+    
+    # Optimizer & Loss Function
+    optimizer = optim.Adam(model.parameters(), lr=params['learning_rate'])
+    criterion = nn.BCELoss()  # Binary classification
+    
+    best_val_aucpr = 0
+    best_model_path = "best_model.pth"
+    
+    # Training Loop
+    for epoch in range(10):  # Adjust epoch count as needed
+        model.train()
+        train_preds, train_labels = [], []
+        
+        for num_features, cat_features, one_hot_features, labels in train_loader:
+            num_features, cat_features, one_hot_features, labels = (
+                num_features.to(device), cat_features.to(device), one_hot_features.to(device), labels.to(device)
+            )
+            
+            optimizer.zero_grad()
+            outputs = model(num_features, cat_features, one_hot_features)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            
+            train_preds.extend(outputs.detach().cpu().numpy())
+            train_labels.extend(labels.cpu().numpy())
+
+        train_aucpr = average_precision_score(train_labels, train_preds)
+
+        # Validation Loop
+        model.eval()
+        val_preds, val_labels = [], []
+        
+        with torch.no_grad():
+            for num_features, cat_features, one_hot_features, labels in valid_loader:
+                num_features, cat_features, one_hot_features, labels = (
+                    num_features.to(device), cat_features.to(device), one_hot_features.to(device), labels.to(device)
+                )
+                outputs = model(num_features, cat_features, one_hot_features)
+                val_preds.extend(outputs.cpu().numpy())
+                val_labels.extend(labels.cpu().numpy())
+
+        val_aucpr = average_precision_score(val_labels, val_preds)
+
+        print(f"Epoch {epoch+1}: Train AUCPR = {train_aucpr:.4f}, Validation AUCPR = {val_aucpr:.4f}")
+
+        # Save the best model
+        if val_aucpr > best_val_aucpr:
+            best_val_aucpr = val_aucpr
+            torch.save(model.state_dict(), best_model_path)
+
+    return best_val_aucpr
 
 # 🔹 Feature Selection & Hyperparameter Tuning
 def hyperparameter_tuning_with_feature_selection():
