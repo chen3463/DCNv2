@@ -12,7 +12,6 @@ import shap
 # 🚀 Device Configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# 🔹 Data Loader with Unknown Category Handling
 class DataLoaderWrapper:
     def __init__(self, train_path, valid_path, test_path, numerical_columns, categorical_columns, one_hot_columns):
         self.numerical_columns = numerical_columns
@@ -30,15 +29,19 @@ class DataLoaderWrapper:
         self._fit_transformers()
 
     def _fit_transformers(self):
-        # Label Encoding with Unseen Category Handling
+        # Custom Label Encoding with Unseen Category Handling
         for col in self.categorical_columns:
             le = LabelEncoder()
             self.train_df[col] = le.fit_transform(self.train_df[col].astype(str))
-            le_classes = np.append(le.classes_, "unknown")  # Add "unknown" class
-            le.classes_ = le_classes  # Update classes with "unknown"
-            self.valid_df[col] = np.where(self.valid_df[col].isin(le.classes_), le.transform(self.valid_df[col]), le.transform(["unknown"])[0])
-            self.test_df[col] = np.where(self.test_df[col].isin(le.classes_), le.transform(self.test_df[col]), le.transform(["unknown"])[0])
+            
+            # Store the learned classes and append "unknown"
+            le_classes = np.append(le.classes_, "unknown")
+            le.classes_ = le_classes
             self.encoders[col] = le
+
+            # Apply encoding with unknown handling
+            self.valid_df[col] = self._transform_with_unknown(le, self.valid_df[col])
+            self.test_df[col] = self._transform_with_unknown(le, self.test_df[col])
 
         # Standard Scaling for Numerical Features
         self.train_df[self.numerical_columns] = self.scaler.fit_transform(self.train_df[self.numerical_columns])
@@ -47,6 +50,10 @@ class DataLoaderWrapper:
 
         # One-Hot Encoding with Unknown Handling
         self.one_hot_enc.fit(self.train_df[self.one_hot_columns])
+
+    def _transform_with_unknown(self, le, series):
+        """Encodes categories, assigning unseen values to 'unknown'."""
+        return series.apply(lambda x: le.transform([x])[0] if x in le.classes_ else le.transform(["unknown"])[0])
 
     def get_dataloader(self, df, batch_size=32):
         num_features = torch.tensor(df[self.numerical_columns].values, dtype=torch.float32)
