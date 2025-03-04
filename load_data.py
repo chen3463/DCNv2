@@ -1,75 +1,72 @@
 import pandas as pd
 import numpy as np
 import torch
+
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import StandardScaler, LabelEncoder, OneHotEncoder
-from collections import defaultdict
-import optuna
 
-# 🔹 Load CSV Files
-def load_data(file_path):
-    return pd.read_csv(file_path)
+# 🔹 Data Loader with Unknown Category Handling
+class DataLoaderWrapper:
+    def __init__(self, train_path, valid_path, test_path, numerical_columns, categorical_columns, one_hot_columns):
+        self.numerical_columns = numerical_columns
+        self.categorical_columns = categorical_columns
+        self.one_hot_columns = one_hot_columns
 
-# 🔹 Fit Label Encoders on Training Data
-def fit_label_encoders(df, categorical_columns):
-    encoders = {}
-    for col in categorical_columns:
-        encoder = LabelEncoder()
-        encoder.fit(df[col])
-        encoders[col] = encoder
-    return encoders
+        self.train_df = pd.read_csv(train_path)
+        self.valid_df = pd.read_csv(valid_path)
+        self.test_df = pd.read_csv(test_path)
 
-# 🔹 Transform Data & Handle Unseen Categories
-def transform_categorical(df, categorical_columns, encoders):
-    cat_tensors = []
-    for col in categorical_columns:
-        encoder = encoders[col]
-        transformed = df[col].apply(lambda x: encoder.transform([x])[0] if x in encoder.classes_ else len(encoder.classes_))
-        cat_tensors.append(torch.tensor(transformed.values, dtype=torch.long))
-    
-    return torch.stack(cat_tensors, dim=1) if cat_tensors else torch.empty((len(df), 0))
+        self.encoders = {}
+        self.scaler = StandardScaler()
+        self.one_hot_enc = OneHotEncoder(sparse_output=False, handle_unknown="ignore")  # ✅ Fixed
 
-# 🔹 One-Hot Encode Data
-def one_hot_encode(df, one_hot_columns):
-    encoder = OneHotEncoder(sparse=False, handle_unknown='ignore')
-    one_hot_encoded = encoder.fit_transform(df[one_hot_columns])
-    return torch.tensor(one_hot_encoded, dtype=torch.float32), encoder
+        self._fit_transformers()
 
-# 🔹 Preprocess Data
-def preprocess_data(df, categorical_columns, one_hot_columns, numerical_columns, target_column, encoders=None, scaler=None, one_hot_encoder=None, train_mode=True):
-    if train_mode:
-        encoders = fit_label_encoders(df, categorical_columns)
-        scaler = StandardScaler().fit(df[numerical_columns])
-        one_hot_tensor, one_hot_encoder = one_hot_encode(df, one_hot_columns)
-    else:
-        one_hot_tensor = torch.tensor(one_hot_encoder.transform(df[one_hot_columns]), dtype=torch.float32)
+    def _fit_transformers(self):
+        # 🔹 Label Encoding with Unseen Category Handling
+        for col in self.categorical_columns:
+            le = LabelEncoder()
+            self.train_df[col] = le.fit_transform(self.train_df[col].astype(str))
 
-    cat_tensor = transform_categorical(df, categorical_columns, encoders)
-    num_tensor = torch.tensor(scaler.transform(df[numerical_columns]), dtype=torch.float32)
-    target_tensor = torch.tensor(df[target_column].values, dtype=torch.float32)
+            # Append "unknown" as a new category
+            le_classes = list(le.classes_)
+            le_classes.append("unknown")
+            le.classes_ = np.array(le_classes)
 
-    return num_tensor, cat_tensor, one_hot_tensor, target_tensor, encoders, scaler, one_hot_encoder
+            # Transform validation & test data (map unknowns)
+            self.valid_df[col] = self.valid_df[col].astype(str).apply(lambda x: x if x in le.classes_ else "unknown")
+            self.valid_df[col] = le.transform(self.valid_df[col])
 
-# 🔹 Define Columns
-categorical_columns = ["cat1", "cat2", "cat3"]  
-one_hot_columns = ["one_hot1", "one_hot2"]
-numerical_columns = ["num1", "num2", "num3", "num4"]  
-target_column = "label"
+            self.test_df[col] = self.test_df[col].astype(str).apply(lambda x: x if x in le.classes_ else "unknown")
+            self.test_df[col] = le.transform(self.test_df[col])
 
-# 🔹 Preprocess Data
-train_df = load_data("train.csv")
-valid_df = load_data("valid.csv")
-test_df = load_data("test.csv")
-train_num, train_cat, train_one_hot, train_labels, encoders, scaler, one_hot_encoder = preprocess_data(train_df, categorical_columns, one_hot_columns, numerical_columns, target_column, train_mode=True)
-valid_num, valid_cat, valid_one_hot, valid_labels, _, _, _ = preprocess_data(valid_df, categorical_columns, one_hot_columns, numerical_columns, target_column, encoders, scaler, one_hot_encoder, train_mode=False)
-test_num, test_cat, test_one_hot, test_labels, _, _, _ = preprocess_data(test_df, categorical_columns, one_hot_columns, numerical_columns, target_column, encoders, scaler, one_hot_encoder, train_mode=False)
+            self.encoders[col] = le
 
-# 🔹 Create DataLoaders
-def create_dataloader(num_tensor, cat_tensor, one_hot_tensor, labels, batch_size):
-    dataset = TensorDataset(num_tensor, cat_tensor, one_hot_tensor, labels)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        # 🔹 Standard Scaling for Numerical Features
+        if self.numerical_columns:
+            self.train_df[self.numerical_columns] = self.scaler.fit_transform(self.train_df[self.numerical_columns])
+            self.valid_df[self.numerical_columns] = self.scaler.transform(self.valid_df[self.numerical_columns])
+            self.test_df[self.numerical_columns] = self.scaler.transform(self.test_df[self.numerical_columns])
 
-batch_size = 64  
-train_loader = create_dataloader(train_num, train_cat, train_one_hot, train_labels, batch_size)
-valid_loader = create_dataloader(valid_num, valid_cat, valid_one_hot, valid_labels, batch_size)
-test_loader = create_dataloader(test_num, test_cat, test_one_hot, test_labels, batch_size)
+        # 🔹 One-Hot Encoding (Fixed Unknown Handling)
+        if self.one_hot_columns:
+            self.one_hot_enc.fit(self.train_df[self.one_hot_columns])
+
+    def get_dataloader(self, df, selected_features, batch_size=32):
+        num_features = torch.tensor(df[[col for col in self.numerical_columns if col in selected_features]].values, dtype=torch.float32)
+        cat_features = torch.tensor(df[[col for col in self.categorical_columns if col in selected_features]].values, dtype=torch.long)
+
+        # 🔹 Fixed One-Hot Encoding for Unknown Categories
+        if self.one_hot_columns:
+            try:
+                one_hot_features = self.one_hot_enc.transform(df[self.one_hot_columns])
+            except:
+                one_hot_features = pd.get_dummies(df[self.one_hot_columns]).values  # Fallback
+            one_hot_features = torch.tensor(one_hot_features, dtype=torch.float32)
+        else:
+            one_hot_features = torch.empty((len(df), 0))  # No one-hot features
+
+        labels = torch.tensor(df['target'].values, dtype=torch.float32)
+
+        dataset = TensorDataset(num_features, cat_features, one_hot_features, labels)
+        return DataLoader(dataset, batch_size=batch_size, shuffle=True)
