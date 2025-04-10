@@ -9,7 +9,7 @@ Implement the DCN v2 for binary classification problems
     ├── utils.py
     └── main.py
 ```
-
+```
 INPUT:
   ├─ Numerical features         (num_numerical)
   ├─ Categorical indices        (categorical_emb: for embedding)
@@ -48,3 +48,4 @@ INPUT:
 
 OUTPUT:
     └─ Predicted probability per sample (shape: [batch_size])
+```
