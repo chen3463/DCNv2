@@ -1,3 +1,5 @@
+In short, DCN is a hybrid model that efficiently captures both low-order and high-order feature interactions. It’s especially powerful for structured data problems like ad ranking, CTR prediction, and recommendations where feature interactions matter
+
 Implement the DCN v2 for binary classification problems
 ```
 /project
